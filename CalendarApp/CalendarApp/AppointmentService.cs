@@ -3,35 +3,97 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Xml;
+using System.Timers;
+using Timer = System.Timers.Timer;
 
 namespace CalendarApp
 {
+    public enum ValidationResult
+    {
+        VALID,
+        EMPTY_TITLE,
+        NEGATIVE_DURATION
+    }
+
+    public class CalendarData
+    {
+        public List<Appointment> Appointments { get; set; } = new List<Appointment>();
+        public List<GroupMeeting> GroupMeetings { get; set; } = new List<GroupMeeting>();
+        public List<Reminder> Reminders { get; set; } = new List<Reminder>();
+    }
+
     public static class AppointmentService
     {
-        private static readonly string FilePath = "appointments.json";
+        private static readonly string FilePath = "calendar_data.json";
+        private static Timer reminderTimer;
+        private static CalendarData currentData;
 
-        public static bool ValidateTime(Appointment appt)
+        static AppointmentService()
         {
-            return appt.StartTime < appt.EndTime;
+            StartReminderTimer();
         }
 
-        public static bool IsOverlap(Appointment newAppt, List<Appointment> existing)
+        public static ValidationResult ValidateAppointment(Appointment appt)
         {
-            return existing.Any(e => !(newAppt.EndTime <= e.StartTime || newAppt.StartTime >= e.EndTime));
+            if (string.IsNullOrWhiteSpace(appt.Title))
+                return ValidationResult.EMPTY_TITLE;
+            if (appt.StartTime >= appt.EndTime)
+                return ValidationResult.NEGATIVE_DURATION;
+            return ValidationResult.VALID;
         }
 
-        public static void SaveToFile(List<Appointment> appointments)
+        public static List<Appointment> CheckOverlap(Appointment newAppt, List<Appointment> existing)
         {
-            string json = JsonConvert.SerializeObject(appointments, Newtonsoft.Json.Formatting.Indented);
+            return existing.Where(e => newAppt.IsOverlap(e)).ToList();
+        }
+
+        public static GroupMeeting FindMatchingGroupMeeting(Appointment appt, List<GroupMeeting> meetings)
+        {
+            return meetings.FirstOrDefault(m => m.IsSimilarTo(appt));
+        }
+
+        public static void SaveToFile(CalendarData data)
+        {
+            currentData = data;
+            string json = JsonConvert.SerializeObject(data, Formatting.Indented);
             File.WriteAllText(FilePath, json);
         }
 
-        public static List<Appointment> LoadFromFile()
+        public static CalendarData LoadFromFile()
         {
-            if (!File.Exists(FilePath)) return new List<Appointment>();
+            if (!File.Exists(FilePath)) return new CalendarData();
             string json = File.ReadAllText(FilePath);
-            return JsonConvert.DeserializeObject<List<Appointment>>(json) ?? new List<Appointment>();
+            currentData = JsonConvert.DeserializeObject<CalendarData>(json) ?? new CalendarData();
+            return currentData;
+        }
+
+        private static void StartReminderTimer()
+        {
+            reminderTimer = new Timer(60000); // Check every minute
+            reminderTimer.Elapsed += (s, e) => CheckReminders();
+            reminderTimer.Start();
+        }
+
+        public static void CheckReminders()
+        {
+            if (currentData == null) return;
+            foreach (var reminder in currentData.Reminders)
+            {
+                reminder.Trigger();
+            }
+            SaveToFile(currentData);
+        }
+
+        public static void AddReminder(string appointmentId, string title, DateTime reminderTime)
+        {
+            if (currentData == null) currentData = LoadFromFile();
+            currentData.Reminders.Add(new Reminder
+            {
+                AppointmentId = appointmentId,
+                AppointmentTitle = title,
+                ReminderTime = reminderTime
+            });
+            SaveToFile(currentData);
         }
     }
 }
